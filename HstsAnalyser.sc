@@ -1,3 +1,8 @@
+#!/usr/bin/env amm
+/**
+  * Script to analyse a bind file and the domains within for HSTS readiness
+  */
+
 import $ivy.`dnsjava:dnsjava:2.1.7`
 import $ivy.`org.typelevel::cats:0.8.1`
 import $ivy.`org.scalaj::scalaj-http:2.3.0`
