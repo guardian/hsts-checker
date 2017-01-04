@@ -20,21 +20,38 @@ import scalaj.http._
 import fansi._
 
 sealed trait TestResult
-case class Success(hstsHeader: Option[String]) extends TestResult
+case class Success(hstsHeader: Option[HstsHeader]) extends TestResult
 trait Failed extends TestResult
 case object Unresolvable extends Failed
 case object Unreachable extends Failed
 case object ConnectionRefused extends Failed
 case class SSLHandshakeFailed(message: String) extends Failed
 
+case class HstsHeader(maxAge: Option[Long], includeSubdomains: Boolean, preload: Boolean)
+object HstsHeader {
+  def apply(headerValue: String): Either[FailureReason, HstsHeader] = {
+    try {
+      val components = headerValue.split(';').map(_.trim).filterNot(_.isEmpty)
+      val includeSubDomains = components.contains("includeSubDomains")
+      val preload = components.contains("preload")
+      val maxAge = components.find(_.startsWith("max-age=")).map { maxAgeFragment =>
+        maxAgeFragment.stripPrefix("max-age=").toLong
+      }
+      Right(HstsHeader(maxAge, includeSubDomains, preload))
+    } catch {
+      case NonFatal(e) => Left(FailureReason(s"${e.getMessage}"))
+    }
+  }
+}
+
 case class ResultPair(http: TestResult, https: TestResult) {
   val causeForConcern = (http, https) match {
-    case (Success(_), Success(_)) => false
+    case (Success(_), Success(Some(header))) => false
     case (Success(_), _) => true
     case _ => false
   }
   val hsts = https match {
-    case Success(header) => Some(header)
+    case Success(header) => header
     case _ => None
   }
 }
@@ -74,7 +91,10 @@ def testConn(record: Record, https: Boolean): Either[FailureReason, TestResult] 
   try {
     val response = Http(url).asString
     val hstsHeader = response.header("Strict-Transport-Security")
-    Right(Success(hstsHeader))
+    hstsHeader.map(HstsHeader.apply) match {
+      case Some(header) => header.map(h => Success(Some(h)))
+      case None => Right(Success(None))
+    }
   } catch {
     case _:UnknownHostException => Right(Unresolvable)
     case _:SocketTimeoutException => Right(Unreachable)
@@ -113,10 +133,10 @@ val csvReportGenerator: ReportGenerator = { results =>
     }
   }
 
-  val header = Str("Name,Type,Value,HTTP,HTTPS,HSTS")
+  val header = Str("Name,Type,Value,HTTP,HTTPS,HSTS max-age,HSTS includeSubDomains,HSTS preload")
   val data = results.map { case (record, pair) =>
-    val hsts = pair.hsts.getOrElse("")
-    Str(s"${record.name},${record.typeName},${record.resourceRecord},${csvValue(pair.http)},${csvValue(pair.https)},$hsts")
+    val hsts = pair.hsts
+    Str(s"${record.name},${record.typeName},${record.resourceRecord},${csvValue(pair.http)},${csvValue(pair.https)},${hsts.map(_.maxAge).getOrElse("")},${hsts.map(_.includeSubdomains).getOrElse("")},${hsts.map(_.preload).getOrElse("")}")
   }
 
   Some(Report(header :: data))
@@ -142,22 +162,33 @@ def terminalReportGenerator(verbose: Boolean, ansi: Boolean = true): ReportGener
   }
 
   val resultsToOutput = if (verbose) results else results.filter(_._2.causeForConcern)
-  val maybeWarning = if (resultsToOutput.size < results.size) Some(Str(s"${results.size - resultsToOutput.size} record results look fine and are not shown")) else None
+  val maybeWarning = if (resultsToOutput.size < results.size)
+    List(
+      Str(s"${results.size - resultsToOutput.size} record results look fine and are not shown"),
+      Str("NOTE: this includes hosts that are unreachable on both HTTP and HTTPS, to see the full list use the verbose flag")
+    ) else Nil
 
   if (resultsToOutput.nonEmpty) {
     val maxNameWidth = resultsToOutput.map{case (record, _) => record.name.length}.max
-    val reportHeader = Color.Yellow(s"WARNING: ${resultsToOutput.size} records point to servers that are available over HTTP but not over HTTPS")
+    val reportHeader = Color.Yellow(s"WARNING: ${resultsToOutput.size} records point to servers that are available over HTTP but not over HTTPS or do not have HSTS headers")
     val header =
       pr(Str("  ")) ++
       pr(Color.White("Record Name"), Some(maxNameWidth+2)) ++
       pr(Color.White("HTTP Result"), Some(20)) ++
-      pr(Color.White("HTTPS Result"))
+      pr(Color.White("HTTPS Result"), Some(20)) ++
+      pr(Color.White("HSTS Header (ma, isd, pl"))
     val rows = resultsToOutput.sortBy(_._1.name).map { case (record, pair) =>
       val name = Str(s"${record.name}")
+      val hsts = pair.hsts.map{ header =>
+        val maxAge = header.maxAge.getOrElse(0L)
+        Str(s"$maxAge${if(header.includeSubdomains){", isd"} else {""}}${if(header.preload){", pl"}else{""}}")
+          .overlay(if (maxAge < 10886400L) Color.Yellow else Color.Green)
+      }.getOrElse(Color.Yellow("No header"))
       pr(Str("  ")) ++
       pr(name, Some(maxNameWidth+2)) ++
       pr(terminalValue(pair.http, causeForConcern = false), Some(20)) ++
-      pr(terminalValue(pair.https, pair.causeForConcern))
+      pr(terminalValue(pair.https, pair.causeForConcern), Some(20)) ++
+      pr(hsts)
     }
     Some(Report((reportHeader :: header :: rows) ++ maybeWarning))
   } else {

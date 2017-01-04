@@ -10,6 +10,11 @@ You'll need to have [Ammonite](http://www.lihaoyi.com/Ammonite/) (and Scala) ins
 
 Once installed you can run the script using `./HstsAnalyser.sc <file> [output]`. The file should be a BIND format zone file and output can be one of `csv` or `terminal` and defaults to `terminal`.
 
+Some examples:
+ 
+ - `./HstsAnalyser.sc example.net.zonefile csv` = write out a CSV report for the zone
+ - `./HstsAnalyser.sc example.net.zonefile -- --verbose true` = write out a verbose report that includes results that are successful on HTTPS with a suitable HSTS header and also results where no connection could be made on HTTP or HTTPS
+
 To-do
 -----
  - Show only records that are problematic: for the most part the only records we're really interested in are those that connect over HTTP but fail to connect over HTTPS - these are the ones that will break when HSTS preloading is switched on
