@@ -7,7 +7,7 @@ import $ivy.`dnsjava:dnsjava:2.1.7`
 import $ivy.`org.typelevel::cats:0.8.1`
 import $ivy.`org.scalaj::scalaj-http:2.3.0`
 import $ivy.`com.lihaoyi::fansi:0.2.3`
-import org.xbill.DNS.{Record => JRecord, Master, Type, Address}
+import org.xbill.DNS.{Record => JRecord, Master, Type}
 
 import java.io.{File, PrintStream}
 import java.net.{ConnectException, UnknownHostException, SocketTimeoutException}
@@ -76,17 +76,20 @@ def testConn(record: Record, https: Boolean): Either[FailureReason, TestResult] 
     val hstsHeader = response.header("Strict-Transport-Security")
     Right(Success(hstsHeader))
   } catch {
-    case unknownHost:UnknownHostException => Right(Unresolvable)
-    case unreachable:SocketTimeoutException => Right(Unreachable)
-    case connectionRefused:ConnectException => Right(ConnectionRefused)
+    case _:UnknownHostException => Right(Unresolvable)
+    case _:SocketTimeoutException => Right(Unreachable)
+    case _:ConnectException => Right(ConnectionRefused)
     case sslFailed:SSLHandshakeException => Right(SSLHandshakeFailed(sslFailed.getMessage))
     case NonFatal(e) => Left(FailureReason(s"WTF? ${e.getClass} ${e.getMessage}"))
   }
 }
 
-type Result = (Record, Either[FailureReason, ResultPair])
+type PossibleResult = (Record, Either[FailureReason, ResultPair])
+type Result = (Record, ResultPair)
+type ReportGenerator = List[Result] => Option[Report]
+type RecordsByType = Map[String, List[Record]]
 
-def testRecords(records: List[Record])(progress: (Int, Int) => Unit = (_,_) => ()): List[Result] = {
+def testRecords(records: List[Record])(progress: (Int, Int) => Unit = (_,_) => ()): List[PossibleResult] = {
   records.zipWithIndex.map { case (record, index) =>
     progress(index+1, records.size)
     val testResult = for {
@@ -97,7 +100,9 @@ def testRecords(records: List[Record])(progress: (Int, Int) => Unit = (_,_) => (
   }
 }
 
-def resultsToCsv(results: List[Result], output: PrintStream) {
+case class Report(lines: List[Str])
+
+val csvReportGenerator: ReportGenerator = { results =>
   def csvValue(result: TestResult) = {
     result match {
       case Unreachable => "unreachable"
@@ -108,21 +113,20 @@ def resultsToCsv(results: List[Result], output: PrintStream) {
     }
   }
 
-  output.println("Name,Type,Value,HTTP,HTTPS,HSTS")
-  results.map { case (record, Right(pair)) =>
+  val header = Str("Name,Type,Value,HTTP,HTTPS,HSTS")
+  val data = results.map { case (record, pair) =>
     val hsts = pair.hsts.getOrElse("")
-    output.println(s"${record.name},${record.typeName},${record.resourceRecord},${csvValue(pair.http)},${csvValue(pair.https)},$hsts")
+    Str(s"${record.name},${record.typeName},${record.resourceRecord},${csvValue(pair.http)},${csvValue(pair.https)},$hsts")
   }
+
+  Some(Report(header :: data))
 }
 
-def resultsToTerminal(results: List[Result], output: PrintStream, ansi: Boolean = true) {
-  def formatStr(msg: Str) = if (ansi) msg else msg.plainText
-  def pr(msg: Str, width: Option[Int] = None) = {
-    val padding = width.map(_ - msg.length)
-    output.print(msg)
-    padding.foreach(p => output.print(" " * p))
+def terminalReportGenerator(verbose: Boolean, ansi: Boolean = true): ReportGenerator = { results =>
+  def pr(msg: Str, width: Option[Int] = None): Str = {
+    val padding = width.map(_ - msg.length).getOrElse(0)
+    msg ++ Str(" " * padding)
   }
-  def prl(msg: Str) = output.println(formatStr(msg))
   
   def terminalValue(result: TestResult, causeForConcern: Boolean) = {
     def error(message: String) = {
@@ -136,37 +140,141 @@ def resultsToTerminal(results: List[Result], output: PrintStream, ansi: Boolean 
       case Success(_) => Color.Green("Success")
     }
   }
-  
-  if (results.nonEmpty) {
-    val maxNameWidth = results.map{case (record, _) => record.name.length}.max
-    pr(Color.White("Record Name"), Some(maxNameWidth+2))
-    pr(Color.White("HTTP Result"), Some(20))
-    prl(Color.White("HTTPS Result"))
-    results.sortBy(_._1.name).foreach{ case (record, Right(pair)) =>
-      val name = Str(record.name)
-      pr(name, Some(maxNameWidth+2))
-      pr(terminalValue(pair.http, false), Some(20))
-      prl(terminalValue(pair.https, pair.causeForConcern))
+
+  val resultsToOutput = if (verbose) results else results.filter(_._2.causeForConcern)
+  val maybeWarning = if (resultsToOutput.size < results.size) Some(Str(s"${results.size - resultsToOutput.size} record results look fine and are not shown")) else None
+
+  if (resultsToOutput.nonEmpty) {
+    val maxNameWidth = resultsToOutput.map{case (record, _) => record.name.length}.max
+    val reportHeader = Color.Yellow(s"WARNING: ${resultsToOutput.size} records point to servers that are available over HTTP but not over HTTPS")
+    val header =
+      pr(Str("  ")) ++
+      pr(Color.White("Record Name"), Some(maxNameWidth+2)) ++
+      pr(Color.White("HTTP Result"), Some(20)) ++
+      pr(Color.White("HTTPS Result"))
+    val rows = resultsToOutput.sortBy(_._1.name).map { case (record, pair) =>
+      val name = Str(s"${record.name}")
+      pr(Str("  ")) ++
+      pr(name, Some(maxNameWidth+2)) ++
+      pr(terminalValue(pair.http, causeForConcern = false), Some(20)) ++
+      pr(terminalValue(pair.https, pair.causeForConcern))
+    }
+    Some(Report((reportHeader :: header :: rows) ++ maybeWarning))
+  } else {
+    None
+  }
+}
+
+def aAndCnameReport(recordsByType: RecordsByType, outputFormat: String, verbose: Boolean, limit: Int): Either[Report, Option[Report]] = {
+  // do this first so that we error when the output option matches nothing
+  val outputProcessor: ReportGenerator = outputFormat match {
+    case "terminal" => terminalReportGenerator(verbose)
+    case "csv" => csvReportGenerator
+    case other =>
+      System.err.println(s"$other is not a valid output format")
+      System.exit(1)
+      throw new RuntimeException(s"$other is not a valid output format")
+  }
+
+  System.err.println("Testing A and CNAME records")
+  val simpleRecords = recordsByType("A") ::: recordsByType("CNAME")
+  val limitedRecords = if (limit == 0) simpleRecords else simpleRecords.take(limit)
+  val possibleResults = testRecords(limitedRecords){ (soFar, total) =>
+    System.err.print(s"\r$soFar/$total")
+  }
+  System.err.println()
+
+  val (errors, results) = possibleResults.foldLeft[(List[(Record, FailureReason)], List[Result])]((Nil, Nil)){
+    case ((errorAcc, resultAcc), (record, either)) =>
+      either.fold(
+        failure =>
+          (errorAcc :+ (record, failure), resultAcc)
+        ,
+        result =>
+          (errorAcc, resultAcc :+ (record, result))
+      )
+  }
+  if (errors.nonEmpty) {
+    val summary = Color.Yellow(s"ERROR: ${errors.size} errors encountered whilst checking A and CNAME records")
+    val errorRows = errors.map { case (record, failureReason) =>
+      Str(s"${record.name}: ${failureReason.message}")
+    }
+    Left(Report(summary :: errorRows))
+  } else {
+    Right(outputProcessor(results))
+  }
+}
+
+def delegatedZonesReport(recordsByType: RecordsByType): Either[Report, Option[Report]] = {
+  val nsRecords = recordsByType("NS")
+  if (nsRecords.isEmpty) {
+    Right(None)
+  } else {
+    val delegatedZones = nsRecords.filterNot(_.name.isEmpty).map(_.name).distinct.sorted
+    val header = Color.Yellow(s"WARNING: ${delegatedZones.size} subdomains are delegated to external zones - it is not possible to fully analyse this zone. Please check these zones individually.")
+    val rows = delegatedZones.map(zone => Color.White(s"  $zone"))
+    Right(Some(Report(header :: rows)))
+  }
+}
+
+def dnameZonesReport(recordsByType: RecordsByType): Either[Report, Option[Report]] = {
+  val dnameRecords = recordsByType("DNAME")
+  if (dnameRecords.isEmpty) {
+    Right(None)
+  } else {
+    val delegatedZones = dnameRecords.map(_.name).distinct.sorted
+    val header = Color.Yellow(s"WARNING: ${delegatedZones.size} subdomains use DNAME to delegate to external zones - it is not possible to fully analyse this zone. Please check these records individually.")
+    val rows = delegatedZones.map(zone => Color.White(s"  $zone"))
+    Right(Some(Report(header :: rows)))
+  }
+}
+
+def aaaaReport(recordsByType: RecordsByType): Either[Report, Option[Report]] = {
+  val aaaaRecords = recordsByType("AAAA")
+  if (aaaaRecords.isEmpty) {
+    Right(None)
+  } else {
+    val ipv6Records = aaaaRecords.map(_.name).distinct.sorted
+    val header = Color.Yellow(s"WARNING: There are ${ipv6Records.size} AAAA (IPv6) records - this tool does not currently separately analyse IPv6 so you are advised to check these records manually.")
+    val rows = ipv6Records.map(zone => Color.White(s"  $zone"))
+    Right(Some(Report(header :: rows)))
+  }
+}
+
+def outputReport(report: Report, stream: PrintStream, ansi: Boolean = true): Unit = {
+  report.lines.foreach { line =>
+    stream.println(if (ansi) line else line.plainText)
+  }
+}
+
+def printReports(results: List[Either[Report, Option[Report]]]) = {
+  val (errorReports, resultReports) = results.foldLeft[(List[Report], List[Report])](Nil, Nil) { case ((errAcc, resAcc), either) =>
+    either.fold(
+      err => (errAcc :+ err, resAcc),
+      res => (errAcc, resAcc ++ res)
+    )
+  }
+  if (errorReports.nonEmpty) {
+    errorReports.foreach(outputReport(_, System.err))
+    System.exit(1)
+  } else {
+    resultReports.foreach { report =>
+      outputReport(report, System.out)
+      System.out.println()
     }
   }
 }
 
 @main
-def entrypoint(file: File, output: String = "terminal", limit: Int = 0) {
+def main(file: File, output: String = "terminal", verbose: Boolean = false, limit: Int = 0) {
   System.err.println("Loading master file")
   val records = loadBindFile(file)
   val recordsByType = records.groupBy(_.typeName).withDefaultValue(Nil)
-  val simpleRecords = recordsByType("A") ::: recordsByType("CNAME")
-  val outputProcessor: List[Result] => Unit = output match {
-    case "terminal" => (results) => resultsToTerminal(results, System.out)
-    case "csv" => (results) => resultsToCsv(results, System.out)
-  }
-  System.err.println("Testing A and CNAME records")
-  val limitedRecords = if (limit == 0) simpleRecords else simpleRecords.take(limit)
-  val results = testRecords(limitedRecords){ (soFar, total) =>
-    System.err.print(s"\r$soFar/$total")
-  }
-  System.err.println
-  System.err.println
-  outputProcessor(results)
+  val results =
+    aAndCnameReport(recordsByType, output, verbose, limit) ::
+    delegatedZonesReport(recordsByType) ::
+    dnameZonesReport(recordsByType) ::
+    aaaaReport(recordsByType) ::
+    Nil
+  printReports(results)
 }
