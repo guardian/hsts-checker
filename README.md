@@ -6,7 +6,7 @@ This script helps you do that. It takes a BIND master file as input, attempts to
 
 How to run
 ----------
-You'll need to have [Ammonite](http://www.lihaoyi.com/Ammonite/) (and Scala) installed to run this script. If you are on OSX then simply `brew install ammonite-repl` should do the job.
+You'll need to have [Ammonite](http://www.lihaoyi.com/Ammonite/) (and Scala) installed to run this script. If you are on OSX then simply `brew install ammonite-repl` should do the job. Note that this tool has been developed and tested on Ammonite 0.8.1.
 
 Once installed you can run the script using `./HstsAnalyser.sc <file> [output]`. The file should be a BIND format zone file and output can be one of `csv` or `terminal` and defaults to `terminal`.
 
