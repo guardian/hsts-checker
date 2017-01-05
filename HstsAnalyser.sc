@@ -107,7 +107,7 @@ def testConn(record: Record, https: Boolean): Either[FailureReason, TestResult] 
   val stripped = record.name.stripSuffix(".")
   val url = s"http${if (https) "s" else ""}://$stripped/"
   try {
-    val response = Http(url).asString
+    val response = Http(url).option(HttpOptions.followRedirects(false)).asString
     val hstsHeader = response.header("Strict-Transport-Security")
     val locationHeader = response.header("Location")
     hstsHeader.map(HstsHeader.apply) match {
@@ -283,7 +283,6 @@ def aaaaReport(recordsByType: RecordsByType): Either[Report, Option[Report]] = {
 }
 
 def preloadReport(recordsByType: RecordsByType): Either[Report, Option[Report]] = {
-  val reportHeader = Color.White("HSTS preload readiness report")
   def good(message: String) = Color.Green(s"  ✓ $message")
   def bad(message: String) = Color.Red(s"  ⚠︎ $message")
 
@@ -291,8 +290,8 @@ def preloadReport(recordsByType: RecordsByType): Either[Report, Option[Report]] 
     val message = httpTest match {
       case Success(_, location) if !location.exists(_.toLowerCase.startsWith(s"https://$zone")) =>
         bad(s"Host is listening on HTTP but not sending an immediate redirect to https://$zone")
-      case Success(_, _) => good("Host listening on HTTP and redirecting")
-      case _ => good("Host is not listening on HTTP")
+      case Success(_, _) => good(s"Host listening on http://$zone and redirecting to https://$zone")
+      case _ => good(s"Host is not listening on http://$zone")
     }
     Vector(message)
   }
@@ -308,17 +307,17 @@ def preloadReport(recordsByType: RecordsByType): Either[Report, Option[Report]] 
           case HstsHeader(Some(goodAge), _, _) if goodAge >= 10886400 =>
             good(s"HSTS max-age=$goodAge greater than eighteen weeks (10886400 seconds)")
           case HstsHeader(Some(badAge), _, _) =>
-            good(s"HSTS max-age=$badAge is less than eighteen weeks (10886400 seconds)")
+            bad(s"HSTS max-age=$badAge is less than eighteen weeks (10886400 seconds)")
           case HstsHeader(None, _, _) =>
             bad(s"HSTS max-age parameter is missing, must be set to at least eighteen weeks (10886400 seconds)")
         }
         val includeSubDomains = header match {
           case HstsHeader(_, true, _) => good("HSTS includeSubdomains is specified")
-          case HstsHeader(_, false, _) => good("HSTS includeSubdomains must be specified")
+          case HstsHeader(_, false, _) => bad("HSTS includeSubdomains must be specified")
         }
         val preload = header match {
           case HstsHeader(_, _, true) => good("HSTS preload is specified")
-          case HstsHeader(_, _, false) => good("HSTS preload must be specified")
+          case HstsHeader(_, _, false) => bad("HSTS preload must be specified")
         }
         Vector(good("HSTS header set"), maxAge, includeSubDomains, preload)
 
@@ -328,19 +327,20 @@ def preloadReport(recordsByType: RecordsByType): Either[Report, Option[Report]] 
     httpsAvailable +: hstsHeaderPresent
   }
 
+  System.err.println("Checking pre-load status of apex")
+
   val zone = getZoneName(recordsByType).stripSuffix(".")
 
-  val maybeRootRecord = recordsByType("A").find(_.name == s"$zone.").toRight(
-    FailureReason(s"No root A record found for $zone - the preload check requires a server running on the root of the domain")
+  val maybeApexRecord = recordsByType("A").find(_.name == s"$zone.").toRight(
+    FailureReason(s"No apex A record found for $zone - the preload check requires a server running on the apex of the domain")
   )
 
-  maybeRootRecord match {
+  maybeApexRecord match {
     case Left(reason) => Right(Some(Report(List(bad(reason.message)))))
-    case Right(rootRecord) =>
+    case Right(apexRecord) =>
       val results = for {
-        rootRecord <- maybeRootRecord
-        httpTest <- testConn(rootRecord, https = false)
-        httpsTest <- testConn(rootRecord, https = true)
+        httpTest <- testConn(apexRecord, https = false)
+        httpsTest <- testConn(apexRecord, https = true)
       } yield {
         val httpCheck = checkHttp(zone, httpTest)
         val httpsCheck = checkHttps(zone, httpsTest)
@@ -348,7 +348,10 @@ def preloadReport(recordsByType: RecordsByType): Either[Report, Option[Report]] 
       }
       results.fold(
         failure => Left(Report(List(Str(failure.message)))),
-        lines => Right(Some(Report(reportHeader :: lines.toList)))
+        lines => Right(Some(Report(
+          Color.White("HSTS preload readiness report") ::
+          lines.toList
+        )))
       )
   }
 }
@@ -389,5 +392,6 @@ def main(file: File, output: String = "terminal", verbose: Boolean = false, limi
     aaaaReport(recordsByType) ::
     preloadReport(recordsByType) ::
     Nil
+  System.err.println()
   printReports(results)
 }
