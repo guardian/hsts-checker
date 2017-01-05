@@ -10,22 +10,40 @@ import $ivy.`com.lihaoyi::fansi:0.2.3`
 import org.xbill.DNS.{Record => JRecord, Master, Type}
 
 import java.io.{File, PrintStream}
-import java.net.{ConnectException, UnknownHostException, SocketTimeoutException}
+import java.net.{ConnectException, SocketTimeoutException, UnknownHostException}
 import javax.net.ssl.SSLHandshakeException
 
 import scala.util.control.NonFatal
-
 import cats.syntax.either._
+
 import scalaj.http._
 import fansi._
 
-sealed trait TestResult
-case class Success(hstsHeader: Option[HstsHeader]) extends TestResult
+sealed trait TestResult {
+  def csvValue: String
+  def friendlyName: String
+}
+case class Success(hstsHeader: Option[HstsHeader], locationHeader: Option[String]) extends TestResult {
+  override def csvValue = "success"
+  override def friendlyName = "Success"
+}
 trait Failed extends TestResult
-case object Unresolvable extends Failed
-case object Unreachable extends Failed
-case object ConnectionRefused extends Failed
-case class SSLHandshakeFailed(message: String) extends Failed
+case object Unresolvable extends Failed {
+  override def csvValue: String = "unresolvable"
+  override def friendlyName: String = "Unresolvable"
+}
+case object Unreachable extends Failed {
+  override def csvValue: String = "unreachable"
+  override def friendlyName: String = "Unreachable"
+}
+case object ConnectionRefused extends Failed {
+  override def csvValue = "connection_refused"
+  override def friendlyName = "Connection refused"
+}
+case class SSLHandshakeFailed(message: String) extends Failed {
+  override def csvValue = "ssl_error"
+  override def friendlyName = "SSL Error"
+}
 
 case class HstsHeader(maxAge: Option[Long], includeSubdomains: Boolean, preload: Boolean)
 object HstsHeader {
@@ -46,12 +64,12 @@ object HstsHeader {
 
 case class ResultPair(http: TestResult, https: TestResult) {
   val causeForConcern = (http, https) match {
-    case (Success(_), Success(Some(header))) => false
-    case (Success(_), _) => true
+    case (Success(_, _), Success(Some(header), _)) => false
+    case (Success(_, _), _) => true
     case _ => false
   }
   val hsts = https match {
-    case Success(header) => header
+    case Success(header, _) => header
     case _ => None
   }
 }
@@ -91,9 +109,10 @@ def testConn(record: Record, https: Boolean): Either[FailureReason, TestResult] 
   try {
     val response = Http(url).asString
     val hstsHeader = response.header("Strict-Transport-Security")
+    val locationHeader = response.header("Location")
     hstsHeader.map(HstsHeader.apply) match {
-      case Some(header) => header.map(h => Success(Some(h)))
-      case None => Right(Success(None))
+      case Some(header) => header.map(h => Success(Some(h), locationHeader))
+      case None => Right(Success(None, locationHeader))
     }
   } catch {
     case _:UnknownHostException => Right(Unresolvable)
@@ -120,23 +139,15 @@ def testRecords(records: List[Record])(progress: (Int, Int) => Unit = (_,_) => (
   }
 }
 
-case class Report(lines: List[Str])
+case class Report(lines: List[Str]) {
+  def +(line: Str) = this.copy(this.lines :+ line)
+}
 
 val csvReportGenerator: ReportGenerator = { results =>
-  def csvValue(result: TestResult) = {
-    result match {
-      case Unreachable => "unreachable"
-      case Unresolvable => "unresolvable"
-      case ConnectionRefused => "connection_refused"
-      case SSLHandshakeFailed(_) => "ssl_error"
-      case Success(_) => "success"
-    }
-  }
-
   val header = Str("Name,Type,Value,HTTP,HTTPS,HSTS max-age,HSTS includeSubDomains,HSTS preload")
   val data = results.map { case (record, pair) =>
     val hsts = pair.hsts
-    Str(s"${record.name},${record.typeName},${record.resourceRecord},${csvValue(pair.http)},${csvValue(pair.https)},${hsts.map(_.maxAge).getOrElse("")},${hsts.map(_.includeSubdomains).getOrElse("")},${hsts.map(_.preload).getOrElse("")}")
+    Str(s"${record.name},${record.typeName},${record.resourceRecord},${pair.http.csvValue},${pair.https.csvValue},${hsts.map(_.maxAge).getOrElse("")},${hsts.map(_.includeSubdomains).getOrElse("")},${hsts.map(_.preload).getOrElse("")}")
   }
 
   Some(Report(header :: data))
@@ -153,19 +164,16 @@ def terminalReportGenerator(verbose: Boolean, ansi: Boolean = true): ReportGener
       Str(message).overlay(if(causeForConcern) Color.Red else Color.Yellow)
     }
     result match {
-      case Unreachable => error("Unreachable")
-      case Unresolvable => error("Unresolvable")
-      case ConnectionRefused => error("Connection Refused")
-      case SSLHandshakeFailed(_) => Color.Red("SSL Error")
-      case Success(_) => Color.Green("Success")
+      case SSLHandshakeFailed(_) => Color.Red(result.friendlyName)
+      case Success(_, _) => Color.Green(result.friendlyName)
+      case other => error(other.friendlyName)
     }
   }
 
   val resultsToOutput = if (verbose) results else results.filter(_._2.causeForConcern)
   val maybeWarning = if (resultsToOutput.size < results.size)
     List(
-      Str(s"${results.size - resultsToOutput.size} record results look fine and are not shown"),
-      Str("NOTE: this includes hosts that are unreachable on both HTTP and HTTPS, to see the full list use the verbose flag")
+      Str(s"${results.size - resultsToOutput.size} record results look fine and are not shown (this includes hosts that are unreachable on both HTTP and HTTPS, to see the full list use the verbose flag)")
     ) else Nil
 
   if (resultsToOutput.nonEmpty) {
@@ -176,7 +184,7 @@ def terminalReportGenerator(verbose: Boolean, ansi: Boolean = true): ReportGener
       pr(Color.White("Record Name"), Some(maxNameWidth+2)) ++
       pr(Color.White("HTTP Result"), Some(20)) ++
       pr(Color.White("HTTPS Result"), Some(20)) ++
-      pr(Color.White("HSTS Header (ma, isd, pl"))
+      pr(Color.White("HSTS Header (ma, isd, pl)"))
     val rows = resultsToOutput.sortBy(_._1.name).map { case (record, pair) =>
       val name = Str(s"${record.name}")
       val hsts = pair.hsts.map{ header =>
@@ -195,6 +203,8 @@ def terminalReportGenerator(verbose: Boolean, ansi: Boolean = true): ReportGener
     None
   }
 }
+
+def getZoneName(recordsByType: RecordsByType): String = recordsByType("SOA").head.name
 
 def aAndCnameReport(recordsByType: RecordsByType, outputFormat: String, verbose: Boolean, limit: Int): Either[Report, Option[Report]] = {
   // do this first so that we error when the output option matches nothing
@@ -237,11 +247,11 @@ def aAndCnameReport(recordsByType: RecordsByType, outputFormat: String, verbose:
 }
 
 def delegatedZonesReport(recordsByType: RecordsByType): Either[Report, Option[Report]] = {
-  val nsRecords = recordsByType("NS")
+  val nsRecords = recordsByType("NS").filterNot(_.name == getZoneName(recordsByType))
   if (nsRecords.isEmpty) {
     Right(None)
   } else {
-    val delegatedZones = nsRecords.filterNot(_.name.isEmpty).map(_.name).distinct.sorted
+    val delegatedZones = nsRecords.map(_.name).distinct.sorted
     val header = Color.Yellow(s"WARNING: ${delegatedZones.size} subdomains are delegated to external zones - it is not possible to fully analyse this zone. Please check these zones individually.")
     val rows = delegatedZones.map(zone => Color.White(s"  $zone"))
     Right(Some(Report(header :: rows)))
@@ -269,6 +279,77 @@ def aaaaReport(recordsByType: RecordsByType): Either[Report, Option[Report]] = {
     val header = Color.Yellow(s"WARNING: There are ${ipv6Records.size} AAAA (IPv6) records - this tool does not currently separately analyse IPv6 so you are advised to check these records manually.")
     val rows = ipv6Records.map(zone => Color.White(s"  $zone"))
     Right(Some(Report(header :: rows)))
+  }
+}
+
+def preloadReport(recordsByType: RecordsByType): Either[Report, Option[Report]] = {
+  val reportHeader = Color.White("HSTS preload readiness report")
+  def good(message: String) = Color.Green(s"  ✓ $message")
+  def bad(message: String) = Color.Red(s"  ⚠︎ $message")
+
+  def checkHttp(zone: String, httpTest: TestResult): Vector[Str] = {
+    val message = httpTest match {
+      case Success(_, location) if !location.exists(_.toLowerCase.startsWith(s"https://$zone")) =>
+        bad(s"Host is listening on HTTP but not sending an immediate redirect to https://$zone")
+      case Success(_, _) => good("Host listening on HTTP and redirecting")
+      case _ => good("Host is not listening on HTTP")
+    }
+    Vector(message)
+  }
+
+  def checkHttps(zone: String, httpsTest: TestResult): Vector[Str] = {
+    val httpsAvailable = httpsTest match {
+      case Success(_, _) => good(s"Valid HTTPS at https://$zone")
+      case other => bad(s"HTTPS not working on https://$zone/: ${other.friendlyName}")
+    }
+    val hstsHeaderPresent = httpsTest match {
+      case Success(Some(header), _) =>
+        val maxAge = header match {
+          case HstsHeader(Some(goodAge), _, _) if goodAge >= 10886400 =>
+            good(s"HSTS max-age=$goodAge greater than eighteen weeks (10886400 seconds)")
+          case HstsHeader(Some(badAge), _, _) =>
+            good(s"HSTS max-age=$badAge is less than eighteen weeks (10886400 seconds)")
+          case HstsHeader(None, _, _) =>
+            bad(s"HSTS max-age parameter is missing, must be set to at least eighteen weeks (10886400 seconds)")
+        }
+        val includeSubDomains = header match {
+          case HstsHeader(_, true, _) => good("HSTS includeSubdomains is specified")
+          case HstsHeader(_, false, _) => good("HSTS includeSubdomains must be specified")
+        }
+        val preload = header match {
+          case HstsHeader(_, _, true) => good("HSTS preload is specified")
+          case HstsHeader(_, _, false) => good("HSTS preload must be specified")
+        }
+        Vector(good("HSTS header set"), maxAge, includeSubDomains, preload)
+
+      case Success(None, _) => Vector(bad("No HSTS header"))
+      case _ => Vector.empty
+    }
+    httpsAvailable +: hstsHeaderPresent
+  }
+
+  val zone = getZoneName(recordsByType).stripSuffix(".")
+
+  val maybeRootRecord = recordsByType("A").find(_.name == s"$zone.").toRight(
+    FailureReason(s"No root A record found for $zone - the preload check requires a server running on the root of the domain")
+  )
+
+  maybeRootRecord match {
+    case Left(reason) => Right(Some(Report(List(bad(reason.message)))))
+    case Right(rootRecord) =>
+      val results = for {
+        rootRecord <- maybeRootRecord
+        httpTest <- testConn(rootRecord, https = false)
+        httpsTest <- testConn(rootRecord, https = true)
+      } yield {
+        val httpCheck = checkHttp(zone, httpTest)
+        val httpsCheck = checkHttps(zone, httpsTest)
+        httpCheck ++ httpsCheck
+      }
+      results.fold(
+        failure => Left(Report(List(Str(failure.message)))),
+        lines => Right(Some(Report(reportHeader :: lines.toList)))
+      )
   }
 }
 
@@ -306,6 +387,7 @@ def main(file: File, output: String = "terminal", verbose: Boolean = false, limi
     delegatedZonesReport(recordsByType) ::
     dnameZonesReport(recordsByType) ::
     aaaaReport(recordsByType) ::
+    preloadReport(recordsByType) ::
     Nil
   printReports(results)
 }
