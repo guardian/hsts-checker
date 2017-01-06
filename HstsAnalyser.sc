@@ -11,10 +11,9 @@ import org.xbill.DNS.{Record => JRecord, Master, Type}
 
 import java.io.{File, PrintStream}
 import java.net.{ConnectException, SocketTimeoutException, UnknownHostException}
-import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.{SSLHandshakeException, SSLProtocolException}
 
 import scala.util.control.NonFatal
-import cats.syntax.either._
 
 import scalaj.http._
 import fansi._
@@ -42,7 +41,10 @@ case object ConnectionRefused extends Failed {
 }
 case class SSLHandshakeFailed(message: String) extends Failed {
   override def csvValue = "ssl_error"
-  override def friendlyName = "SSL Error"
+  val truncatedMessage = if (message.length > 35) message.take(34) + "…" else message
+  override def friendlyName = {
+    s"SSL Error: $truncatedMessage"
+  }
 }
 
 case class HstsHeader(maxAge: Option[Long], includeSubdomains: Boolean, preload: Boolean)
@@ -119,6 +121,7 @@ def testConn(record: Record, https: Boolean): Either[FailureReason, TestResult] 
     case _:SocketTimeoutException => Right(Unreachable)
     case _:ConnectException => Right(ConnectionRefused)
     case sslFailed:SSLHandshakeException => Right(SSLHandshakeFailed(sslFailed.getMessage))
+    case sniError:SSLProtocolException => Right(SSLHandshakeFailed(sniError.getMessage))
     case NonFatal(e) => Left(FailureReason(s"WTF? ${e.getClass} ${e.getMessage}"))
   }
 }
@@ -178,12 +181,14 @@ def terminalReportGenerator(verbose: Boolean, ansi: Boolean = true): ReportGener
 
   if (resultsToOutput.nonEmpty) {
     val maxNameWidth = resultsToOutput.map{case (record, _) => record.name.length}.max
+    val maxHttpWidth = resultsToOutput.map{case (_, ResultPair(http, _)) => http.friendlyName.length}.max
+    val maxHttpsWidth = resultsToOutput.map{case (_, ResultPair(_, https)) => https.friendlyName.length}.max
     val reportHeader = Color.Yellow(s"WARNING: ${resultsToOutput.size} records point to servers that are available over HTTP but not over HTTPS or do not have HSTS headers")
     val header =
       pr(Str("  ")) ++
       pr(Color.White("Record Name"), Some(maxNameWidth+2)) ++
-      pr(Color.White("HTTP Result"), Some(20)) ++
-      pr(Color.White("HTTPS Result"), Some(20)) ++
+      pr(Color.White("HTTP Result"), Some(maxHttpWidth+2)) ++
+      pr(Color.White("HTTPS Result"), Some(maxHttpsWidth+2)) ++
       pr(Color.White("HSTS Header (ma, isd, pl)"))
     val rows = resultsToOutput.sortBy(_._1.name).map { case (record, pair) =>
       val name = Str(s"${record.name}")
@@ -194,8 +199,8 @@ def terminalReportGenerator(verbose: Boolean, ansi: Boolean = true): ReportGener
       }.getOrElse(Color.Yellow("No header"))
       pr(Str("  ")) ++
       pr(name, Some(maxNameWidth+2)) ++
-      pr(terminalValue(pair.http, causeForConcern = false), Some(20)) ++
-      pr(terminalValue(pair.https, pair.causeForConcern), Some(20)) ++
+      pr(terminalValue(pair.http, causeForConcern = false), Some(maxHttpWidth+2)) ++
+      pr(terminalValue(pair.https, pair.causeForConcern), Some(maxHttpsWidth+2)) ++
       pr(hsts)
     }
     Some(Report((reportHeader :: header :: rows) ++ maybeWarning))
