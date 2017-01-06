@@ -132,14 +132,22 @@ type ReportGenerator = List[Result] => Option[Report]
 type RecordsByType = Map[String, List[Record]]
 
 def testRecords(records: List[Record])(progress: (Int, Int) => Unit = (_,_) => ()): List[PossibleResult] = {
-  records.zipWithIndex.map { case (record, index) =>
-    progress(index+1, records.size)
+  var counter = 0
+  progress(0, records.size)
+  records.par.map { case record =>
     val testResult = for {
       httpsResult <- testConn(record, https = true)
       httpResult <- testConn(record, https = false)
     } yield ResultPair(httpResult, httpsResult)
+
+    // brutally simple thread safety: lock on the incoming list object
+    records.synchronized {
+      counter += 1
+      progress(counter, records.size)
+    }
+
     record -> testResult
-  }
+  }.toList
 }
 
 case class Report(lines: List[Str]) {
