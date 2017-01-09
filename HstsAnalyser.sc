@@ -7,16 +7,17 @@ import $ivy.`dnsjava:dnsjava:2.1.7`
 import $ivy.`org.typelevel::cats:0.8.1`
 import $ivy.`org.scalaj::scalaj-http:2.3.0`
 import $ivy.`com.lihaoyi::fansi:0.2.3`
-import org.xbill.DNS.{Record => JRecord, Master, Type}
 
-import java.io.{File, PrintStream}
+import org.xbill.DNS.{Master, Type, Record => JRecord}
+import java.io.{ByteArrayInputStream, File, InputStream, PrintStream}
 import java.net.{ConnectException, SocketTimeoutException, UnknownHostException}
 import javax.net.ssl.{SSLHandshakeException, SSLProtocolException}
 
 import scala.util.control.NonFatal
-
 import scalaj.http._
 import fansi._
+
+import scala.io.Source
 
 sealed trait TestResult {
   def csvValue: String
@@ -99,8 +100,24 @@ object Record {
     Record(jr.getName.toString, jr.getTTL, Type.string(jr.getType), jr.rdataToString)
 }
 
-def loadBindFile(bindFile: File): List[Record] = {
-  val bindFileParser = new Master(bindFile.toString)
+/* This is an almighty hack to deal with Dyn giving us CNAME records that have priorities */
+def cleanDynCname(line: String): String = {
+  val DynCnameRegex = """([a-zA-Z@-_]*\s+)(\d+\s+)CNAME\s+\d+(\s+.*)""".r
+  line match {
+    case DynCnameRegex(name, ttl, resourceRecord) => s"$name${ttl}CNAME$resourceRecord"
+    case other => other
+  }
+}
+
+def loadBindFile(bindFile: File): InputStream = {
+  val bindContents = Source.fromFile(bindFile, "ASCII")
+  val bindLines = bindContents.getLines
+  val cleanedLines = bindLines.map(cleanDynCname)
+  new ByteArrayInputStream(cleanedLines.mkString("\n").getBytes("ASCII"))
+}
+
+def parseBindData(bindData: InputStream): List[Record] = {
+  val bindFileParser = new Master(bindData)
   val jRecords = new MasterIterator(bindFileParser).toList
   jRecords.map(Record.apply)
 }
@@ -396,7 +413,8 @@ def printReports(results: List[Either[Report, Option[Report]]]) = {
 @main
 def main(file: File, output: String = "terminal", verbose: Boolean = false, limit: Int = 0) {
   System.err.println("Loading master file")
-  val records = loadBindFile(file)
+  val inputStream = loadBindFile(file)
+  val records = parseBindData(inputStream)
   val recordsByType = records.groupBy(_.typeName).withDefaultValue(Nil)
   val results =
     aAndCnameReport(recordsByType, output, verbose, limit) ::

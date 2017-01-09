@@ -22,4 +22,3 @@ This only checks services that are found on standard HTTP and HTTPS ports. Hosts
 To-do
 -----
  - Provide option to analyse a Route53 zone
- - Parse non-standard CNAME records found in Dyn BIND files
