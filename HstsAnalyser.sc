@@ -10,7 +10,7 @@ import $ivy.`com.lihaoyi::fansi:0.2.3`
 
 import org.xbill.DNS.{Master, Type, Record => JRecord}
 import java.io.{ByteArrayInputStream, File, InputStream, PrintStream}
-import java.net.{ConnectException, SocketTimeoutException, UnknownHostException}
+import java.net.{ConnectException, SocketException, SocketTimeoutException, UnknownHostException}
 import javax.net.ssl.{SSLHandshakeException, SSLProtocolException}
 
 import scala.util.control.NonFatal
@@ -39,6 +39,13 @@ case object Unreachable extends Failed {
 case object ConnectionRefused extends Failed {
   override def csvValue = "connection_refused"
   override def friendlyName = "Connection refused"
+}
+case class ConnectionFailed(message: String) extends Failed {
+  override def csvValue: String = "connection"
+  val truncatedMessage = if (message.length > 35) message.take(34) + "…" else message
+  override def friendlyName = {
+    s"Connection Error: $truncatedMessage"
+  }
 }
 case class SSLHandshakeFailed(message: String) extends Failed {
   override def csvValue = "ssl_error"
@@ -137,6 +144,7 @@ def testConn(record: Record, https: Boolean): Either[FailureReason, TestResult] 
     case _:UnknownHostException => Right(Unresolvable)
     case _:SocketTimeoutException => Right(Unreachable)
     case _:ConnectException => Right(ConnectionRefused)
+    case connectFailed:SocketException => Right(ConnectionFailed(connectFailed.getMessage))
     case sslFailed:SSLHandshakeException => Right(SSLHandshakeFailed(sslFailed.getMessage))
     case sniError:SSLProtocolException => Right(SSLHandshakeFailed(sniError.getMessage))
     case NonFatal(e) => Left(FailureReason(s"WTF? ${e.getClass} ${e.getMessage}"))
