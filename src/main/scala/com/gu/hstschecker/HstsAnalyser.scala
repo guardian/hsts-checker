@@ -19,7 +19,6 @@ object HstsAnalyser {
   def main(args: Array[String]) {
     CliOptions.parser.parse(args, CliOptions()) match {
       case Some(options) =>
-        System.err.print(options.toString)
         val zoneOrFailure: Either[Failure, Zone] = options match {
           case CliOptions(_, _, _, Some(bindFile), _, _, _) =>
             val inputStream = BindFile.loadBindFile(bindFile)

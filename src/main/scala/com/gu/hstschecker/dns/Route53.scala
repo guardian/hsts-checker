@@ -28,7 +28,8 @@ object Route53 {
 
   def convertFromAwsRecordSet(rrs: ResourceRecordSet): List[Record] = {
     rrs.getResourceRecords.asScala.toList.map { record =>
-      Record(rrs.getName, rrs.getTTL, rrs.getType, record.getValue)
+      val fixedName = rrs.getName.replace("\\052", "*")
+      Record(fixedName, rrs.getTTL, rrs.getType, record.getValue)
     }
   }
 
