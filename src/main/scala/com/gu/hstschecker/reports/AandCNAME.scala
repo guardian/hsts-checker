@@ -23,7 +23,8 @@ object AandCNAME {
     System.err.println("Testing A and CNAME records")
     val simpleRecords = zone.recordsByType("A") ::: zone.recordsByType("CNAME")
     // host names cannot contain underscores - this helpful filters out validation records
-    val hostRecordsOnly = simpleRecords.filterNot(_.name.contains("_"))
+    // equally checking a wildcard record makes no sense
+    val hostRecordsOnly = simpleRecords.filterNot(record => record.name.contains("_") || record.name.startsWith("*"))
     val limitedRecords = if (limit == 0) hostRecordsOnly else hostRecordsOnly.take(limit)
     val possibleResults = testRecords(limitedRecords) { (soFar, total) =>
       System.err.print(s"\r$soFar/$total")

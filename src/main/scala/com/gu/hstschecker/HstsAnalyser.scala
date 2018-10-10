@@ -44,6 +44,7 @@ object HstsAnalyser {
         } yield {
             AandCNAME.report(zone, options.output, options.verbose, options.limit) ::
             DelegatedZones.report(zone) ::
+            Wildcard.report(zone) ::
             DNAME.report(zone) ::
             AAAA.report(zone) ::
             Preload.report(zone) ::
