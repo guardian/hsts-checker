@@ -7,24 +7,24 @@ import com.gu.hstschecker.connection._
 import com.gu.hstschecker.reports.Report.FailureReason
 import fansi.{Color, Str}
 
+import scala.collection.TraversableOnce
+
 object AandCNAME {
 
   type PossibleResult = (Record, Either[FailureReason, ResultPair])
 
-  def report(zone: Zone, outputFormat: String, verbose: Boolean, limit: Int): Either[Report, Option[Report]] = {
+  def report(zone: Zone, outputFormat: OutputMode, verbose: Boolean, limit: Int): Either[Report, Option[Report]] = {
     // do this first so that we error when the output option matches nothing
     val outputProcessor: ReportGenerator = outputFormat match {
-      case "terminal" => terminalReportGenerator(verbose)
-      case "csv" => csvReportGenerator
-      case other =>
-        System.err.println(s"$other is not a valid output format")
-        System.exit(1)
-        throw new RuntimeException(s"$other is not a valid output format")
+      case Terminal => terminalReportGenerator(verbose)
+      case CSV => csvReportGenerator
     }
 
     System.err.println("Testing A and CNAME records")
     val simpleRecords = zone.recordsByType("A") ::: zone.recordsByType("CNAME")
-    val limitedRecords = if (limit == 0) simpleRecords else simpleRecords.take(limit)
+    // host names cannot contain underscores - this helpful filters out validation records
+    val hostRecordsOnly = simpleRecords.filterNot(_.name.contains("_"))
+    val limitedRecords = if (limit == 0) hostRecordsOnly else hostRecordsOnly.take(limit)
     val possibleResults = testRecords(limitedRecords) { (soFar, total) =>
       System.err.print(s"\r$soFar/$total")
     }
@@ -95,15 +95,18 @@ object AandCNAME {
       ) else Nil
 
     if (resultsToOutput.nonEmpty) {
-      val maxNameWidth = resultsToOutput.map { case (record, _) => record.name.length }.max
-      val maxHttpWidth = resultsToOutput.map { case (_, ResultPair(http, _)) => http.friendlyName.length }.max
-      val maxHttpsWidth = resultsToOutput.map { case (_, ResultPair(_, https)) => https.friendlyName.length }.max
+      val recordNameHeader = "Record Name"
+      val httpResultHeader = "HTTP Result"
+      val httpsResultHeader = "HTTPS Result"
+      val maxNameWidth = max(recordNameHeader, resultsToOutput.map { case (record, _) => record.name.length })
+      val maxHttpWidth = max(httpResultHeader, resultsToOutput.map { case (_, ResultPair(http, _)) => http.friendlyName.length })
+      val maxHttpsWidth = max(httpsResultHeader, resultsToOutput.map { case (_, ResultPair(_, https)) => https.friendlyName.length })
       val reportHeader = Color.Yellow(s"WARNING: ${resultsToOutput.size} records point to servers that are available over HTTP but not over HTTPS or do not have HSTS headers")
       val header =
         pr(Str("  ")) ++
-          pr(Color.White("Record Name"), Some(maxNameWidth + 2)) ++
-          pr(Color.White("HTTP Result"), Some(maxHttpWidth + 2)) ++
-          pr(Color.White("HTTPS Result"), Some(maxHttpsWidth + 2)) ++
+          pr(Color.White(recordNameHeader), Some(maxNameWidth + 2)) ++
+          pr(Color.White(httpResultHeader), Some(maxHttpWidth + 2)) ++
+          pr(Color.White(httpsResultHeader), Some(maxHttpsWidth + 2)) ++
           pr(Color.White("HSTS Header (ma, isd, pl)"))
       val rows = resultsToOutput.sortBy(_._1.name).map { case (record, pair) =>
         val name = Str(s"${record.name}")
@@ -145,4 +148,6 @@ object AandCNAME {
 
     Some(Report(header :: data))
   }
+
+  private def max(header: String, lengths: List[Int]) = (header.length :: lengths).max
 }

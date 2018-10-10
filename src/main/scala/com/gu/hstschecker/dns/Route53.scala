@@ -10,7 +10,7 @@ import scala.collection.JavaConverters._
 /*
 Grab a zone from Route53
  */
-class Route53 {
+object Route53 {
   def getZone(zoneName: String)(implicit route53: AmazonRoute53): Either[Failure, Zone] = {
     for {
       zoneId <- getHostedZone(zoneName)
@@ -19,7 +19,7 @@ class Route53 {
     } yield zone
   }
 
-  def getZoneRecords(zoneId: String)(implicit route53: AmazonRoute53) = {
+  def getZoneRecords(zoneId: String)(implicit route53: AmazonRoute53): Either[Failure, List[Record]] = {
     for {
       awsRecords <- PaginatedAWSRequest.run(route53.listResourceRecordSets)(_.getResourceRecordSets)(new ListResourceRecordSetsRequest(zoneId))
       records = awsRecords.flatMap(convertFromAwsRecordSet)

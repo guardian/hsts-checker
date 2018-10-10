@@ -2,6 +2,7 @@ package com.gu.hstschecker.dns
 
 import java.io.{ByteArrayInputStream, File, InputStream}
 
+import com.gu.hstschecker.util.Failure
 import org.xbill.DNS.{Master, Record => JRecord}
 
 import scala.io.Source
@@ -30,16 +31,17 @@ object BindFile {
   }
 
   def loadBindFile(bindFile: File): InputStream = {
+    System.err.println("Loading master file")
     val bindContents = Source.fromFile(bindFile, "ASCII")
     val bindLines = bindContents.getLines
     val cleanedLines = bindLines.map(cleanDynCname)
     new ByteArrayInputStream(cleanedLines.mkString("\n").getBytes("ASCII"))
   }
 
-  def parseBindData(bindData: InputStream): Zone = {
+  def parseBindData(bindData: InputStream): Either[Failure, Zone] = {
     val bindFileParser = new Master(bindData)
     val jRecords = new MasterIterator(bindFileParser).toList
     val records = jRecords.map(Record.apply)
-    Zone(records)
+    Right(Zone(records))
   }
 }

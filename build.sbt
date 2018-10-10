@@ -9,5 +9,6 @@ libraryDependencies ++= Seq(
   "org.typelevel" %% "cats-core" % "1.4.0",
   "org.scalaj" %% "scalaj-http" % "2.4.1",
   "com.lihaoyi" %% "fansi" % "0.2.5",
-  "com.amazonaws" % "aws-java-sdk-route53" % "1.11.425"
+  "com.amazonaws" % "aws-java-sdk-route53" % "1.11.425",
+  "com.github.scopt" %% "scopt" % "3.7.0"
 )

@@ -17,7 +17,7 @@ sealed trait FailureWithThrowable extends Failure {
   override def cause = Some(throwable)
 
   // provide a default mechanism for showing the exception to a user
-  override def msg = {
+  override def msg: String = {
     val stringWriter = new StringWriter()
     val writer = new PrintWriter(stringWriter)
     throwable.printStackTrace(writer)
@@ -27,6 +27,8 @@ sealed trait FailureWithThrowable extends Failure {
 }
 
 case class ResourceMissingFailure(msg: String) extends Failure
+
+case class CliOptionsFailure(msg: String) extends Failure
 
 case class UnknownFailure(throwable: Throwable) extends FailureWithThrowable
 
