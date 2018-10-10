@@ -6,5 +6,6 @@ libraryDependencies ++= Seq(
   "dnsjava" % "dnsjava" % "2.1.7",
   "org.typelevel" %% "cats" % "0.8.1",
   "org.scalaj" %% "scalaj-http" % "2.3.0",
-  "com.lihaoyi" %% "fansi" % "0.2.3"
+  "com.lihaoyi" %% "fansi" % "0.2.3",
+  "com.amazonaws" % "aws-java-sdk-route53" % "1.11.425"
 )
