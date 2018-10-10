@@ -3,9 +3,13 @@ package com.gu.hstschecker.reports
 import com.gu.hstschecker._
 import com.gu.hstschecker.dns.{Record, Zone}
 import com.gu.hstschecker.HstsAnalyser._
+import com.gu.hstschecker.connection._
+import com.gu.hstschecker.reports.Report.FailureReason
 import fansi.{Color, Str}
 
 object AandCNAME {
+
+  type PossibleResult = (Record, Either[FailureReason, ResultPair])
 
   def report(zone: Zone, outputFormat: String, verbose: Boolean, limit: Int): Either[Report, Option[Report]] = {
     // do this first so that we error when the output option matches nothing
@@ -47,6 +51,24 @@ object AandCNAME {
     }
   }
 
+  private def testRecords(records: List[Record])(progress: (Int, Int) => Unit = (_, _) => ()): List[PossibleResult] = {
+    var counter = 0
+    progress(0, records.size)
+    records.par.map { record =>
+      val testResult = for {
+        httpsResult <- ConnectionTester.test(record, https = true)
+        httpResult <- ConnectionTester.test(record, https = false)
+      } yield ResultPair(httpResult, httpsResult)
+
+      // brutally simple thread safety: lock on the incoming list object
+      records.synchronized {
+        counter += 1
+        progress(counter, records.size)
+      }
+
+      record -> testResult
+    }.toList
+  }
 
   private def terminalReportGenerator(verbose: Boolean, ansi: Boolean = true): ReportGenerator = { results =>
     def pr(msg: Str, width: Option[Int] = None): Str = {

@@ -1,11 +1,30 @@
 package com.gu.hstschecker.reports
 
-import com.gu.hstschecker.{FailureReason, HstsHeader, Success, TestResult}
-import com.gu.hstschecker.HstsAnalyser.testConn
+import com.gu.hstschecker.connection.{ConnectionTester, Success, TestResult}
 import com.gu.hstschecker.dns.Zone
+import com.gu.hstschecker.reports.Report.FailureReason
 import fansi.{Color, Str}
 
+import scala.util.control.NonFatal
+
 object Preload {
+  case class HstsHeader(maxAge: Option[Long], includeSubdomains: Boolean, preload: Boolean)
+  object HstsHeader {
+    def apply(headerValue: String): Either[FailureReason, HstsHeader] = {
+      try {
+        val components = headerValue.split(';').map(_.trim).filterNot(_.isEmpty)
+        val includeSubDomains = components.contains("includeSubDomains")
+        val preload = components.contains("preload")
+        val maxAge = components.find(_.startsWith("max-age=")).map { maxAgeFragment =>
+          maxAgeFragment.stripPrefix("max-age=").toLong
+        }
+        Right(HstsHeader(maxAge, includeSubDomains, preload))
+      } catch {
+        case NonFatal(e) => Left(FailureReason(s"${e.getMessage}"))
+      }
+    }
+  }
+
   def report(zone: Zone): Either[Report, Option[Report]] = {
     def good(message: String) = Color.Green(s"  ✓ $message")
 
@@ -64,8 +83,8 @@ object Preload {
       case Left(reason) => Right(Some(Report(List(bad(reason.message)))))
       case Right(apexRecord) =>
         val results = for {
-          httpTest <- testConn(apexRecord, https = false)
-          httpsTest <- testConn(apexRecord, https = true)
+          httpTest <- ConnectionTester.test(apexRecord, https = false)
+          httpsTest <- ConnectionTester.test(apexRecord, https = true)
         } yield {
           val httpCheck = checkHttp(zoneName, httpTest)
           val httpsCheck = checkHttps(zoneName, httpsTest)

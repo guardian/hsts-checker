@@ -12,8 +12,8 @@ object BindFile {
     */
   class MasterIterator(master: Master) extends Iterator[JRecord] {
     var nextRecord = Option(master.nextRecord())
-    def hasNext = nextRecord.nonEmpty
-    def next() = {
+    def hasNext: Boolean = nextRecord.nonEmpty
+    def next(): JRecord = {
       val next = nextRecord.get
       nextRecord = Option(master.nextRecord())
       next
