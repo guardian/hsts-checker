@@ -24,16 +24,20 @@ object HstsAnalyser {
             val inputStream = BindFile.loadBindFile(bindFile)
             BindFile.parseBindData(inputStream)
 
-          case CliOptions(_, _, _, _, Some(r53Zone), Some(awsRegion), maybeProfile) =>
-            val credentialsProvider = maybeProfile.map{ profile =>
-              new ProfileCredentialsProvider(profile)
-            } getOrElse new DefaultAWSCredentialsProviderChain()
+          case CliOptions(_, _, _, _, Some(r53Zone), Some(awsRegion), profiles) =>
+            val credentialsProviders = if (profiles.nonEmpty) {
+              profiles.map{ profile =>
+                new ProfileCredentialsProvider(profile)
+              }.toList
+            } else List(new DefaultAWSCredentialsProviderChain())
 
-            implicit val route53: AmazonRoute53 = AmazonRoute53ClientBuilder
-              .standard()
-              .withRegion(awsRegion)
-              .withCredentials(credentialsProvider)
-              .build()
+            implicit val route53: List[AmazonRoute53] = credentialsProviders.map { credentialsProvider =>
+              AmazonRoute53ClientBuilder
+                .standard()
+                .withRegion(awsRegion)
+                .withCredentials(credentialsProvider)
+                .build()
+            }
 
             Route53.getZone(r53Zone)
           case _ => Left(CliOptionsFailure("Incorrect options, unable to make sense of what you typed."))

@@ -5,7 +5,7 @@ import fansi.Color
 
 object DNAME {
   def report(zone: Zone): Either[Report, Option[Report]] = {
-    val dnameRecords = zone.recordsByType("DNAME")
+    val dnameRecords = zone.allRecordsByType("DNAME")
     if (dnameRecords.isEmpty) {
       Right(None)
     } else {

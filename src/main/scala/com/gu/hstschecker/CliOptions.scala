@@ -23,7 +23,7 @@ case class CliOptions(output: OutputMode = Terminal,
                       bindFile: Option[File] = None,
                       route53Zone: Option[String] = None,
                       awsRegion: Option[String] = None,
-                      awsProfile: Option[String] = None
+                      awsProfiles: Seq[String] = Seq.empty
                      )
 
 object CliOptions {
@@ -50,9 +50,8 @@ object CliOptions {
       c.copy(awsRegion = Some(x))
     ).text("specify the AWS region")
 
-    opt[String]('p', "profile").action((x, c) =>
-      c.copy(awsProfile = Some(x))
-    ).text("specify the AWS profile to use for credentials")
-
+    opt[Seq[String]]('p', "profiles").action((x, c) =>
+      c.copy(awsProfiles = x)
+    ).text("specify the AWS profiles to use for credentials (comma separated list)")
   }
 }

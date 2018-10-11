@@ -5,7 +5,7 @@ import fansi.Color
 
 object Wildcard {
   def report(zone: Zone): Either[Report, Option[Report]] = {
-    val aAndCname = zone.recordsByType("A") ::: zone.recordsByType("CNAME")
+    val aAndCname = zone.allRecordsByType("A") ::: zone.allRecordsByType("CNAME")
     val wildcards = aAndCname.filter(_.name.startsWith("*"))
     if (wildcards.isEmpty) {
       Right(None)

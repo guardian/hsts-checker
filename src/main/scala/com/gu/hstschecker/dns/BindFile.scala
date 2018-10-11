@@ -2,6 +2,7 @@ package com.gu.hstschecker.dns
 
 import java.io.{ByteArrayInputStream, File, InputStream}
 
+import com.gu.hstschecker.dns
 import com.gu.hstschecker.util.Failure
 import org.xbill.DNS.{Master, Record => JRecord}
 
@@ -38,10 +39,12 @@ object BindFile {
     new ByteArrayInputStream(cleanedLines.mkString("\n").getBytes("ASCII"))
   }
 
-  def parseBindData(bindData: InputStream): Either[Failure, Zone] = {
+  def parseBindData(bindData: InputStream): Either[Failure, ActualZone] = {
     val bindFileParser = new Master(bindData)
     val jRecords = new MasterIterator(bindFileParser).toList
     val records = jRecords.map(Record.apply)
-    Right(Zone(records))
+    val delegatedZones = records.filter(_.typeName == "NS").map(record => dns.DelegatedZone(record.name, "subdomain delegated to external nameservers"))
+    Right(ActualZone(records, delegatedZones))
   }
+
 }
