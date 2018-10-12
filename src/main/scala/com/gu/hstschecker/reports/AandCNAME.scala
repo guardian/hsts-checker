@@ -7,8 +7,6 @@ import com.gu.hstschecker.connection._
 import com.gu.hstschecker.reports.Report.FailureReason
 import fansi.{Color, Str}
 
-import scala.collection.TraversableOnce
-
 object AandCNAME {
 
   type PossibleResult = (Record, Either[FailureReason, ResultPair])
@@ -21,7 +19,7 @@ object AandCNAME {
     }
 
     System.err.println("Testing A and CNAME records")
-    val simpleRecords = zone.recordsByType("A") ::: zone.recordsByType("CNAME")
+    val simpleRecords = zone.allRecordsByType("A") ::: zone.allRecordsByType("CNAME")
     // host names cannot contain underscores - this helpful filters out validation records
     // equally checking a wildcard record makes no sense
     val hostRecordsOnly = simpleRecords.filterNot(record => record.name.contains("_") || record.name.startsWith("*"))
@@ -141,10 +139,10 @@ object AandCNAME {
   }
 
   private val csvReportGenerator: ReportGenerator = { results =>
-    val header = Str("Name,Type,Value,HTTP,HTTPS,HSTS max-age,HSTS includeSubDomains,HSTS preload")
+    val header = Str("Name,Type,HTTP,HTTPS,HSTS max-age,HSTS includeSubDomains,HSTS preload")
     val data = results.map { case (record, pair) =>
       val hsts = pair.hsts
-      Str(s"${record.name},${record.typeName},${record.resourceRecord},${pair.http.csvValue},${pair.https.csvValue},${hsts.map(_.maxAge).getOrElse("")},${hsts.map(_.includeSubdomains).getOrElse("")},${hsts.map(_.preload).getOrElse("")}")
+      Str(s"${record.name},${record.typeName},${pair.http.csvValue},${pair.https.csvValue},${hsts.map(_.maxAge).getOrElse("")},${hsts.map(_.includeSubdomains).getOrElse("")},${hsts.map(_.preload).getOrElse("")}")
     }
 
     Some(Report(header :: data))
