@@ -8,6 +8,29 @@ sealed trait Zone {
   lazy val allRecordsByType: Map[String, List[Record]] = allRecords.groupBy(_.typeName).withDefaultValue(Nil)
   def delegations: List[Zone]
   def allZones: List[Zone] = this :: delegations.flatMap(_.allZones)
+
+  override def toString: String = {
+    def delegatedZones: String = {
+      if (delegations.isEmpty) "" else {
+        s"""
+           |DELEGATED ZONES
+           |---------------
+           |${delegations.map(_.toString).mkString("\n").linesWithSeparators.map("    " + _)}
+         """.stripMargin
+      }
+    }
+
+    s"""
+       |ZONE $name
+       |
+       |RECORDS
+       |-------
+       |${allRecords.sorted.mkString("\n")}
+       |
+       |$delegatedZones
+       |
+     """.stripMargin
+  }
 }
 
 case class ActualZone(records: List[Record], delegations: List[Zone]) extends Zone {

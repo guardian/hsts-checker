@@ -46,13 +46,17 @@ object HstsAnalyser {
         val resultsOrFailure = for {
           zone <- zoneOrFailure
         } yield {
-            AandCNAME.report(zone, options.output, options.verbose, options.limit) ::
-            DelegatedZones.report(zone) ::
-            Wildcard.report(zone) ::
-            DNAME.report(zone) ::
-            AAAA.report(zone) ::
-            Preload.report(zone) ::
-            Nil
+          if (options.verbose) {
+            System.err.println(zone)
+          }
+
+          AandCNAME.report(zone, options.output, options.verbose, options.limit) ::
+          DelegatedZones.report(zone) ::
+          Wildcard.report(zone) ::
+          DNAME.report(zone) ::
+          AAAA.report(zone) ::
+          Preload.report(zone) ::
+          Nil
         }
 
         resultsOrFailure match {
