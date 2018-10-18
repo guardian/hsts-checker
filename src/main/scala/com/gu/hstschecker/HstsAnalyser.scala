@@ -8,6 +8,7 @@ import com.amazonaws.auth.DefaultAWSCredentialsProviderChain
 import com.amazonaws.services.route53.{AmazonRoute53, AmazonRoute53ClientBuilder}
 import com.gu.hstschecker.connection.ResultPair
 import com.gu.hstschecker.dns.{BindFile, Record, Route53, Zone}
+import com.gu.hstschecker.dns.Route53.Route53Client
 import com.gu.hstschecker.reports._
 import com.gu.hstschecker.util.{CliOptionsFailure, Failure}
 
@@ -24,22 +25,22 @@ object HstsAnalyser {
             val inputStream = BindFile.loadBindFile(bindFile)
             BindFile.parseBindData(inputStream)
 
-          case CliOptions(_, _, _, _, Some(r53Zone), Some(awsRegion), profiles) =>
+          case CliOptions(_, verbose, _, _, Some(r53Zone), Some(awsRegion), profiles) =>
             val credentialsProviders = if (profiles.nonEmpty) {
               profiles.map{ profile =>
-                new ProfileCredentialsProvider(profile)
+                profile -> new ProfileCredentialsProvider(profile)
               }.toList
-            } else List(new DefaultAWSCredentialsProviderChain())
+            } else List("default" -> new DefaultAWSCredentialsProviderChain())
 
-            implicit val route53: List[AmazonRoute53] = credentialsProviders.map { credentialsProvider =>
-              AmazonRoute53ClientBuilder
+            implicit val route53: List[Route53Client] = credentialsProviders.map { case (name, credentialsProvider) =>
+              Route53Client(name, AmazonRoute53ClientBuilder
                 .standard()
                 .withRegion(awsRegion)
                 .withCredentials(credentialsProvider)
-                .build()
+                .build())
             }
 
-            Route53.getZone(r53Zone)
+            Route53.getZone(r53Zone, verbose)
           case _ => Left(CliOptionsFailure("Incorrect options, unable to make sense of what you typed."))
         }
 

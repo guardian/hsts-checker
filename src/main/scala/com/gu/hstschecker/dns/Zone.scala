@@ -8,6 +8,10 @@ sealed trait Zone {
   lazy val allRecordsByType: Map[String, List[Record]] = allRecords.groupBy(_.typeName).withDefaultValue(Nil)
   def delegations: List[Zone]
   def allZones: List[Zone] = this :: delegations.flatMap(_.allZones)
+}
+
+case class ActualZone(records: List[Record], delegations: List[Zone]) extends Zone {
+  val name: String = recordsByType("SOA").head.name
 
   override def toString: String = {
     def delegatedZones: String = {
@@ -15,7 +19,7 @@ sealed trait Zone {
         s"""
            |DELEGATED ZONES
            |---------------
-           |${delegations.map(_.toString).mkString("\n").linesWithSeparators.map("    " + _)}
+           |${delegations.map(_.toString).mkString("\n").linesWithSeparators.map("    " + _).mkString}
          """.stripMargin
       }
     }
@@ -33,11 +37,15 @@ sealed trait Zone {
   }
 }
 
-case class ActualZone(records: List[Record], delegations: List[Zone]) extends Zone {
-  val name: String = recordsByType("SOA").head.name
-}
-
 case class DelegatedZone(name: String, reason: String) extends Zone {
   val records: List[Record] = Nil
   val delegations: List[Zone] = Nil
+
+  override def toString: String = {
+    s"""
+       |ZONE $name
+       |No data available
+       |
+     """.stripMargin
+  }
 }
